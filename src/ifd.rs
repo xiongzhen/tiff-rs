@@ -8,6 +8,77 @@ fn array_from_slice<const N: usize>(slice: &[u8]) -> &[u8; N] {
     <&[u8] as std::convert::TryInto<&[u8; N]>>::try_into(slice).unwrap()
 }
 
+pub trait ScalarFrom<T>: Sized {
+    fn scalar_from(value: T) -> Result<Self, TiffError>;
+}
+macro_rules! impl_scalar_to_floating_point_from_primitive {
+    ($ttype:ty, $($ftype:ty),*) => {
+        $(impl ScalarFrom<$ftype> for $ttype {
+            fn scalar_from(value: $ftype) -> Result<$ttype, TiffError> {
+                Ok(value as $ttype)
+            }            
+        })*
+    }
+}
+macro_rules! impl_scalar_to_floating_point_from_rational {
+    ($ttype:ty, $($ftype:ty),*) => {
+        $(impl ScalarFrom<$ftype> for $ttype {
+            fn scalar_from(value: $ftype) -> Result<$ttype, TiffError> {
+                let fval = (value[0] as f64) / (value[1] as f64);
+                Ok(fval as $ttype)
+            }
+        })*
+    }
+}
+impl_scalar_to_floating_point_from_primitive!(f64, i8, u8, i16, u16, i32, u32, i64, u64, f32, f64);
+impl_scalar_to_floating_point_from_rational!(f64, [i32;2], [u32;2]);
+macro_rules! impl_scalar_from_integer {
+    ($ftype:ty, $ttype:ty) => {
+        impl ScalarFrom<$ftype> for $ttype {
+            fn scalar_from(value: $ftype) -> Result<$ttype, TiffError> {
+                <$ttype>::try_from(value).or(Err(TiffError::IncompatibleTagDataKind))
+            }
+        }
+    };
+    ($ttype:ty, $($ftype:ty),*) => {
+        $(impl_scalar_from_integer!($ftype, $ttype));*;
+    }
+}
+impl_scalar_from_integer!(i64, i8, u8, i16, u16, i32, u32, i64, u64);
+impl_scalar_from_integer!(u64, i8, u8, i16, u16, i32, u32, i64, u64);
+macro_rules! impl_scalar_from_floating_point {
+    ($ftype:ty, $ttype:ty) => {
+        impl ScalarFrom<$ftype> for $ttype {
+            fn scalar_from(value: $ftype) -> Result<$ttype, TiffError> {
+                if !value.is_finite() || value.fract() != 0.0 || value < <$ttype>::MIN as $ftype || value > <$ttype>::MAX as $ftype {
+                    Err(TiffError::IncompatibleTagDataKind)
+                } else {
+                    Ok(value as $ttype)
+                }
+            }
+        }
+    };
+    ($ttype:ty, $($ftype:ty),*) => {
+        $(impl_scalar_from_floating_point!($ftype, $ttype));*;
+    }
+}
+impl_scalar_from_floating_point!(i64, f32, f64);
+impl_scalar_from_floating_point!(u64, f32, f64);
+macro_rules! impl_scalar_from_rational {
+    ($ftype:ty, $ttype:ty) => {
+        impl ScalarFrom<$ftype> for $ttype {
+            fn scalar_from(value:$ftype) -> Result<$ttype, TiffError> {
+                let fval = (value[0] as f64) / (value[1] as f64);
+                <$ttype>::scalar_from(fval)
+            }
+        }
+    }
+}
+impl_scalar_from_rational!([i32;2], i64);
+impl_scalar_from_rational!([i32;2], u64);
+impl_scalar_from_rational!([u32;2], i64);
+impl_scalar_from_rational!([u32;2], u64);
+
 pub trait PairFromBytes<const N: usize> {
     fn from_le_bytes(data: [u8; N]) -> Self;
     fn from_be_bytes(data: [u8; N]) -> Self;
@@ -89,6 +160,72 @@ macro_rules! define_tag_data {
                     _ => return Err(TiffError::UnknownTagKind),
                 }
             }
+            pub fn as_signed_integer(&self) -> Result<i64, TiffError> {
+                match &self {
+                    $(Self::$name(values) => {
+                        if values.len() != 1 {
+                            Err(TiffError::IncompatibleTagDataKind)
+                        } else {
+                            i64::scalar_from(values[0])
+                        }
+                    }),*
+                }
+            }
+            pub fn as_signed_integers(&self) -> Result<Vec<i64>, TiffError> {
+                match &self {
+                    $(Self::$name(values) => {
+                        let mut results = vec![0i64; values.len()];
+                        for i in 0..values.len() {
+                            results[i] = i64::scalar_from(values[i])?;
+                        }
+                        Ok(results)
+                    }),*
+                }
+            }
+            pub fn as_unsigned_integer(&self) -> Result<u64, TiffError> {
+                match &self {
+                    $(Self::$name(values) => {
+                        if values.len() != 1 {
+                            Err(TiffError::IncompatibleTagDataKind)
+                        } else {
+                            u64::scalar_from(values[0])
+                        }
+                    }),*
+                }
+            }
+            pub fn as_unsigned_integers(&self) -> Result<Vec<u64>, TiffError> {
+                match &self {
+                    $(Self::$name(values) => {
+                        let mut results = vec![0u64; values.len()];
+                        for i in 0..values.len() {
+                            results[i] = u64::scalar_from(values[i])?;
+                        }
+                        Ok(results)
+                    }),*
+                }
+            }
+            pub fn as_floating_point(&self) -> Result<f64, TiffError> {
+                match &self {
+                    $(Self::$name(values) => {
+                        if values.len() != 1 {
+                            Err(TiffError::IncompatibleTagDataKind)
+                        } else {
+                            f64::scalar_from(values[0])
+                        }
+                    }),*
+                }
+            }
+            pub fn as_floating_points(&self) -> Result<Vec<f64>, TiffError> {
+                match &self {
+                    $(Self::$name(values) => {
+                        let mut results = vec![0.0f64; values.len()];
+                        for i in 0..values.len() {
+                            results[i] = f64::scalar_from(values[i])?;
+                        }
+                        Ok(results)
+                    }),*
+                }
+            }
         }
     }
 }
@@ -111,574 +248,6 @@ define_tag_data!(
     SLong8,    i64,     17,     8,
     IFD8,      u64,     18,     8
 );
-impl TagData {
-    pub fn as_signed_integer(&self) -> Result<i64, TiffError> {
-        match &self {
-            TagData::Byte(values) | TagData::Ascii(values) | TagData::Undefined(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as i64);
-            },
-            TagData::SByte(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as i64);
-            },
-            TagData::Short(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as i64);
-            },
-            TagData::SShort(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as i64);
-            },
-            TagData::Long(values) | TagData::IFD(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as i64);
-            },
-            TagData::SLong(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as i64);
-            },
-            TagData::Long8(values) | TagData::IFD8(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                if values[0] > i64::MAX as u64 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as i64);
-            },
-            TagData::SLong8(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0]);
-            },
-            TagData::Float(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                if !values[0].is_finite() || values[0].fract() != 0.0f32 || values[0] < i64::MIN as f32 || values[0] > i64::MAX as f32 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as i64);
-            },
-            TagData::Double(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                if !values[0].is_finite() || values[0].fract() != 0.0f64 || values[0] < i64::MIN as f64 || values[0] > i64::MAX as f64 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as i64);
-            },
-            TagData::Rational(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                if values[0][1] == 0 || values[0][0] % values[0][1] != 0 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok((values[0][0] / values[0][1]) as i64);
-            },
-            TagData::SRational(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                if values[0][1] == 0 || values[0][0] % values[0][1] != 0 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok((values[0][0] / values[0][1]) as i64);
-            }
-        }
-    }
-    pub fn as_signed_integers(&self) -> Result<Vec<i64>, TiffError> {
-        match &self {
-            TagData::Byte(values) | TagData::Ascii(values) | TagData::Undefined(values) => {
-                let mut results = vec![0i64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as i64;
-                }
-                return Ok(results);
-            },
-            TagData::SByte(values) => {
-                let mut results = vec![0i64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as i64;
-                }
-                return Ok(results);
-            },
-            TagData::Short(values) => {
-                let mut results = vec![0i64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as i64;
-                }
-                return Ok(results);
-            },
-            TagData::SShort(values) => {
-                let mut results = vec![0i64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as i64;
-                }
-                return Ok(results);
-            },
-            TagData::Long(values) | TagData::IFD(values) => {
-                let mut results = vec![0i64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as i64;
-                }
-                return Ok(results);
-            },
-            TagData::SLong(values) => {
-                let mut results = vec![0i64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as i64;
-                }
-                return Ok(results);
-            },
-            TagData::Long8(values) | TagData::IFD8(values) => {
-                let mut results = vec![0i64; values.len()];
-                for i in 0..values.len() {
-                    if values[i] > i64::MAX as u64 {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    results[i] = values[i] as i64;
-                }
-                return Ok(results);
-            },
-            TagData::SLong8(values) => {
-                return Ok(values.clone());
-            },
-            TagData::Float(values) => {
-                let mut results = vec![0i64; values.len()];
-                for i in 0..values.len() {
-                    if !values[i].is_finite() || values[i].fract() != 0.0f32 || values[i] < i64::MIN as f32 || values[i] > i64::MAX as f32 {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    results[i] = values[i] as i64;
-                }
-                return Ok(results);
-            },
-            TagData::Double(values) => {
-                let mut results = vec![0i64; values.len()];
-                for i in 0..values.len() {
-                    if !values[i].is_finite() || values[i].fract() != 0.0f64 || values[i] < i64::MIN as f64 || values[i] > i64::MAX as f64 {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    results[i] = values[i] as i64;
-                }
-                return Ok(results);
-            },
-            TagData::Rational(values) => {
-                let mut results = vec![0i64; values.len()];
-                for i in 0..values.len() {
-                    if values[i][1] == 0 || values[i][0] % values[i][1] != 0 {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    results[i] = (values[i][0] / values[i][1]) as i64;
-                }
-                return Ok(results);
-            },
-            TagData::SRational(values) => {
-                let mut results = vec![0i64; values.len()];
-                for i in 0..values.len() {
-                    if values[i][1] == 0 || values[i][0] % values[i][1] != 0 {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    results[i] = (values[i][0] / values[i][1]) as i64;
-                }
-                return Ok(results);
-            }
-        }
-    }
-    pub fn as_unsigned_integer(&self) -> Result<u64, TiffError> {
-        match &self {
-            TagData::Byte(values) | TagData::Ascii(values) | TagData::Undefined(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as u64);
-            },
-            TagData::SByte(values) => {
-                if values.len() != 1 || values[0] < 0 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as u64);
-            },
-            TagData::Short(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as u64);
-            },
-            TagData::SShort(values) => {
-                if values.len() != 1 || values[0] < 0 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as u64);
-            },
-            TagData::Long(values) | TagData::IFD(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as u64);
-            },
-            TagData::SLong(values) => {
-                if values.len() != 1 || values[0] < 0 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as u64);
-            },
-            TagData::Long8(values) | TagData::IFD8(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0]);
-            },
-            TagData::SLong8(values) => {
-                if values.len() != 1 || values[0] < 0 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as u64);
-            },
-            TagData::Float(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                if !values[0].is_finite() || values[0].fract() != 0.0f32 || values[0] < u64::MIN as f32 || values[0] > u64::MAX as f32 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as u64);
-            },
-            TagData::Double(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                if !values[0].is_finite() || values[0].fract() != 0.0f64 || values[0] < u64::MIN as f64 || values[0] > u64::MAX as f64 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as u64);
-            },
-            TagData::Rational(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                if values[0][1] == 0 || values[0][0] % values[0][1] != 0 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok((values[0][0] / values[0][1]) as u64);
-            },
-            TagData::SRational(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                if values[0][1] == 0 || values[0][0] % values[0][1] != 0 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                if (values[0][0] < 0 && values[0][1] > 0) || (values[0][0] > 0 && values[0][1] < 0) {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok((values[0][0] / values[0][1]) as u64);
-            }
-        }
-    }
-    pub fn as_unsigned_integers(&self) -> Result<Vec<u64>, TiffError> {
-        match &self {
-            TagData::Byte(values) | TagData::Ascii(values) | TagData::Undefined(values) => {
-                let mut results = vec![0u64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as u64;
-                }
-                return Ok(results);
-            },
-            TagData::SByte(values) => {
-                let mut results = vec![0u64; values.len()];
-                for i in 0..values.len() {
-                    if values[i] < 0 {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    results[i] = values[i] as u64;
-                }
-                return Ok(results);
-            },
-            TagData::Short(values) => {
-                let mut results = vec![0u64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as u64;
-                }
-                return Ok(results);
-            },
-            TagData::SShort(values) => {
-                let mut results = vec![0u64; values.len()];
-                for i in 0..values.len() {
-                    if values[i] < 0 {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    results[i] = values[i] as u64;
-                }
-                return Ok(results);
-            },
-            TagData::Long(values) | TagData::IFD(values) => {
-                let mut results = vec![0u64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as u64;
-                }
-                return Ok(results);
-            },
-            TagData::SLong(values) => {
-                let mut results = vec![0u64; values.len()];
-                for i in 0..values.len() {
-                    if values[i] < 0 {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    results[i] = values[i] as u64;
-                }
-                return Ok(results);
-            },
-            TagData::Long8(values) | TagData::IFD8(values) => {
-                return Ok(values.clone());
-            },
-            TagData::SLong8(values) => {
-                let mut results = vec![0u64; values.len()];
-                for i in 0..values.len() {
-                    if values[i] < 0 {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    results[i] = values[i] as u64;
-                }
-                return Ok(results);
-            },
-            TagData::Float(values) => {
-                let mut results = vec![0u64; values.len()];
-                for i in 0..values.len() {
-                    if !values[i].is_finite() || values[i].fract() != 0.0f32 || values[i] < u64::MIN as f32 || values[i] > u64::MAX as f32 {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    results[i] = values[i] as u64;
-                }
-                return Ok(results);
-            },
-            TagData::Double(values) => {
-                let mut results = vec![0u64; values.len()];
-                for i in 0..values.len() {
-                    if !values[i].is_finite() || values[i].fract() != 0.0f64 || values[i] < u64::MIN as f64 || values[i] > u64::MAX as f64 {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    results[i] = values[i] as u64;
-                }
-                return Ok(results);
-            },
-            TagData::Rational(values) => {
-                let mut results = vec![0u64; values.len()];
-                for i in 0..values.len() {
-                    if values[i][1] == 0 || values[i][0] % values[i][1] != 0 {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    results[i] = (values[i][0] / values[i][1]) as u64;
-                }
-                return Ok(results);
-            },
-            TagData::SRational(values) => {
-                let mut results = vec![0u64; values.len()];
-                for i in 0..values.len() {
-                    if values[i][1] == 0 || values[i][0] % values[i][1] != 0 {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    if (values[i][0] < 0 && values[i][1] > 0) || (values[i][0] > 0 && values[i][1] < 0) {
-                        return Err(TiffError::IncompatibleTagDataKind);
-                    }
-                    results[i] = (values[i][0] / values[i][1]) as u64;
-                }
-                return Ok(results);
-            }
-        }
-    }
-    pub fn as_floating_point(&self) -> Result<f64, TiffError> {
-        match &self {
-            TagData::Byte(values) | TagData::Ascii(values) | TagData::Undefined(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as f64);
-            },
-            TagData::SByte(values) => {
-                if values.len() != 1 || values[0] < 0 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as f64);
-            },
-            TagData::Short(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as f64);
-            },
-            TagData::SShort(values) => {
-                if values.len() != 1 || values[0] < 0 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as f64);
-            },
-            TagData::Long(values) | TagData::IFD(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as f64);
-            },
-            TagData::SLong(values) => {
-                if values.len() != 1 || values[0] < 0 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as f64);
-            },
-            TagData::Long8(values) | TagData::IFD8(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as f64);
-            },
-            TagData::SLong8(values) => {
-                if values.len() != 1 || values[0] < 0 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as f64);
-            },
-            TagData::Float(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as f64);
-            },
-            TagData::Double(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                return Ok(values[0] as f64);
-            },
-            TagData::Rational(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                if values[0][1] == 0 {
-                    return Ok(f64::NAN);
-                }
-                return Ok(values[0][0] as f64 / values[0][1] as f64);
-            },
-            TagData::SRational(values) => {
-                if values.len() != 1 {
-                    return Err(TiffError::IncompatibleTagDataKind);
-                }
-                if values[0][1] == 0 {
-                    return Ok(f64::NAN);
-                }
-                return Ok(values[0][0] as f64 / values[0][1] as f64);
-            }
-        }
-    }
-    pub fn as_floating_points(&self) -> Result<Vec<f64>, TiffError> {
-        match &self {
-            TagData::Byte(values) | TagData::Ascii(values) | TagData::Undefined(values) => {
-                let mut results = vec![0f64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as f64;
-                }
-                return Ok(results);
-            },
-            TagData::SByte(values) => {
-                let mut results = vec![0f64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as f64;
-                }
-                return Ok(results);
-            },
-            TagData::Short(values) => {
-                let mut results = vec![0f64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as f64;
-                }
-                return Ok(results);
-            },
-            TagData::SShort(values) => {
-                let mut results = vec![0f64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as f64;
-                }
-                return Ok(results);
-            },
-            TagData::Long(values) | TagData::IFD(values) => {
-                let mut results = vec![0f64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as f64;
-                }
-                return Ok(results);
-            },
-            TagData::SLong(values) => {
-                let mut results = vec![0f64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as f64;
-                }
-                return Ok(results);
-            },
-            TagData::Long8(values) | TagData::IFD8(values) => {
-                let mut results = vec![0f64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as f64;
-                }
-                return Ok(results);
-            },
-            TagData::SLong8(values) => {
-                let mut results = vec![0f64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as f64;
-                }
-                return Ok(results);
-            },
-            TagData::Float(values) => {
-                let mut results = vec![0f64; values.len()];
-                for i in 0..values.len() {
-                    results[i] = values[i] as f64;
-                }
-                return Ok(results);
-            },
-            TagData::Double(values) => {
-                return Ok(values.clone());
-            },
-            TagData::Rational(values) => {
-                let mut results = vec![0f64; values.len()];
-                for i in 0..values.len() {
-                    if values[i][1] == 0 {
-                        results[i] = f64::NAN;
-                    } else {
-                        results[i] = (values[i][0]  as f64) / (values[i][1] as f64);
-                    }
-                }
-                return Ok(results);
-            },
-            TagData::SRational(values) => {
-                let mut results = vec![0f64; values.len()];
-                for i in 0..values.len() {
-                    if values[i][1] == 0 {
-                        results[i] = f64::NAN;
-                    } else {
-                        results[i] = (values[i][0] as f64) / (values[i][1] as f64);
-                    }
-                }
-                return Ok(results);
-            }
-        }
-    }
-}
 macro_rules! define_tag_id {
     ($category:ident, $($id:expr, $name:ident),*) => {
         #[derive(PartialEq)]
