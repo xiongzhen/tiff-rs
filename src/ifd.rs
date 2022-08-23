@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom, Read};
-use crate::TiffError;
+use crate::{TiffError, CompressionScheme};
 
 fn array_from_slice<const N: usize>(slice: &[u8]) -> &[u8; N] {
     <&[u8] as std::convert::TryInto<&[u8; N]>>::try_into(slice).unwrap()
@@ -376,6 +376,7 @@ define_tag_id!(Extension,
 0x800D, ImageID,
 0x87AC, ImageLayer
 );
+#[derive(PartialEq)]
 pub enum TagID {
     PrivateTag(u16),
     BaselineTag(Baseline),
@@ -459,5 +460,44 @@ impl IFD {
         let next_ifd = buffer_as_offset!(buffer, btf, le);
 
         Ok(Self{pos, tag_count, tags, next_ifd})
+    }
+    pub fn get_tag(&self, id: TagID) -> Result<&Tag, TiffError> {
+        for tag in &self.tags {
+            if id == tag.id {
+                return Ok(tag);
+            }
+        }
+        return Err(TiffError::CannotFindTag);
+    }
+    pub fn width(&self) -> Result<u64, TiffError> {
+        let tag = self.get_tag(TagID::BaselineTag(Baseline::ImageWidth))?;
+        tag.data.as_unsigned_integer()
+    }
+    pub fn height(&self) -> Result<u64, TiffError> {
+        let tag = self.get_tag(TagID::BaselineTag(Baseline::ImageLength))?;
+        tag.data.as_unsigned_integer()
+    }
+    pub fn samples(&self) -> Result<u64, TiffError> {
+        // default: 1
+        if let Ok(tag) = self.get_tag(TagID::BaselineTag(Baseline::SamplesPerPixel)) {
+            return tag.data.as_unsigned_integer();
+        }
+        Ok(1_u64)
+    }
+    pub fn bpp(&self) -> Result<Vec<u64>, TiffError> {
+        if let Ok(tag) = self.get_tag(TagID::BaselineTag(Baseline::BitsPerSample)) {
+            return tag.data.as_unsigned_integers();
+        }
+        return Ok(vec![1_u64; self.samples()? as usize]);
+    }
+    pub fn compression(&self) -> Result<CompressionScheme, TiffError> {
+        // default: 1 (no compression)
+        if let Ok(tag) = self.get_tag(TagID::BaselineTag(Baseline::Compression)) {
+            match CompressionScheme::from_number(tag.data.as_unsigned_integer()?) {
+                Some(value) => return Ok(value),
+                None => return Err(TiffError::NotSupportedCompressionScheme),
+            }
+        }
+        Ok(CompressionScheme::NoCompression)
     }
 }
