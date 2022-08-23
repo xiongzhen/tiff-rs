@@ -27,3 +27,25 @@ macro_rules! buffer_as_offset {
         }
     }
 }
+
+macro_rules! build_integer_enum {
+    ($name:ident, $kind:ty, $($key:ident, $value:expr),*) => {
+        #[derive(Debug, PartialEq)]
+        pub enum $name {
+            $($key),*,
+        }
+        impl $name {
+            pub fn to_number(&self) -> $kind {
+                match self {
+                    $(Self::$key => $value),*,
+                }
+            }
+            pub fn from_number(value: $kind) -> Option<Self> {
+                match value {
+                    $($value => Some(Self::$key)),*,
+                    _ => None,
+                }
+            }
+        }
+    }
+}
