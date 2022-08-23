@@ -6,6 +6,9 @@ use error::TiffError;
 #[macro_use]
 mod utils;
 
+mod enums;
+use enums::{CompressionScheme};
+
 mod header;
 use header::Header;
 
@@ -32,7 +35,16 @@ mod tests {
         let n = tiff.len();
         for i in 0..n {
             let ifd = tiff.read_frame(i).unwrap();
-            println!("{:#?}", ifd);
+            let width = ifd.width().unwrap();
+            let height = ifd.height().unwrap();
+            let samples = ifd.samples().unwrap();
+            let bpp = ifd.bpp().unwrap();
+            let compression = ifd.compression().unwrap();
+            println!("Image Width: {}", width);
+            println!("Image Height: {}", height);
+            println!("Samples per Pixel: {}", samples);
+            println!("Bits per Sample: {:?}", bpp);
+            println!("Compression: {:?}", compression);
         }
     }
 }
