@@ -13,4 +13,6 @@ pub enum TiffError {
     UnknownTagId,
     InvalidIndex,
     IncompatibleTagDataKind,
+    CannotFindTag,
+    NotSupportedCompressionScheme,
 }
